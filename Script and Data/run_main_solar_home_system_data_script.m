@@ -1,48 +1,37 @@
-%% Main Script for Household Electricity Data Consumption 
-
+%% Main Script for Inputting, Calibrating, and Visualizing Household Electricity Data Consumption 
+% Three households from rural village in Jharkhand, India
+% Over the course of >6 months from June 2015 - Jan 2016
+% Data sampled at 1 minute intervals
 clc;
 clearvars;
 
 %% SELECT HOUSE NUMBER
-% 2,3,4 are only used here for house_number
+% Options are 2,3,4 only for house_number
 house_number = 4;
-%house_string = strcat('House_',num2str(house_number),' October 2015.csv');
+
+
+%% Input Raw Data 
+
+%Create strings to be used in importing data
 house_string = strcat('House_',num2str(house_number),'_January_2016.csv');
 house_date_time_str = strcat('House_',num2str(house_number),'_DT.mat');
 date_str = strcat('House_',num2str(house_number),'_Day');
 time_str = strcat('House_',num2str(house_number),'_Time');
 
-
-
-%% INPUT DATA
-%NOTE: ALL OF THE SPREADSHEETS ARE DIFFERENT SIZES
-%house 1-5 range of data in eload.powercel
-%house_range = {'A18:H161454','A18:H161420', 'A18:H161411', 'A18:H161429', 'A18:H161401'};
-%sheet_name = strcat('House_',num2str(house_number),' October 2015.csv');
-
+%Default setup of .csv file
 start_row = 17;
 width_data = 7;
 
-%house_rng = [161454 161419 161410 161428 161395];
-% start time and end time, each data point is one minute
-% house 2 : 161403 readings
-%went one less than final row in excel spreadsheet
-
-%house_range = {'A18:H319751','A18:H319772', 'A18:H319700', 'A18:H319729', 'A18:H319730'};
-house_range = {'A18:H319751','A18:H319772', 'A18:H319700', 'A18:H154569', 'A18:H319730'};
-%for house 4, need to stitch together.
-%march-june 2016, versus june-feb 
-
-sheet_name = strcat('House_',num2str(house_number),'_January_2016.csv');
-
-%house_rng = [319751 319772 319700 319729 319730];
+%Lengths of datasets in .csv file
 house_rng = [319751 319772 319700 154569 319730];
 
+%Read in .csv file
+datalog=csvread(house_string, 1,1,[start_row 1 house_rng(house_number) width_data]);
+num_readings = length(datalog); % readings are minute by minute
 
-datalog=csvread(house_string, 1,1,[17 1 house_rng(house_number) 7]);
-%remove 0 0 and do 18, 1 for R1 and C1
+
+%% Import date/time data
 date_time = load(house_date_time_str);
-
 field = fieldnames(date_time,'-full');
 numfields = length(field);
 
@@ -54,29 +43,7 @@ for f= 1:numfields
     
 end
 
-
-
-
-% total hours
-num_readings = length(datalog); % readings are minute by minute
-total_mins = 60*floor(num_readings/60);
-total_hours = total_mins/60;
-
-
-%house 1 data looks okay // irradiance levels are low
-%notes: house 2 sign flipped on PV (not sure about battery, leave as is)
-%notes: house 3 battery usage fluctuates between positive and negative
-%nicely
-%house 4 similar to house 3
-% house 5 - pv must be negative, battery values are only one sign? need to
-% calibrate zero value
-%% Calibrate Data
-%data_time_vector = datalog(:,1); %take column -- unused yet.
-%[h m s] = hms(datalog(:,1)) second column
-%[y m d] = ymd(datalog(:,0)) first column
-%use datenum to get a value
-
-%date time values
+%Date and time values
 
 if house_number == 2
 date.ymd = eval(date_str);
@@ -105,56 +72,54 @@ CnvtDT = @(date) datetime([date.year  date.month  date.day  date.hour  date.minu
 date.ymd_hms = CnvtDT(date);
 
 
-%data_time_vector=data_time_vector(2:end); %trim length to be even mulitple of hours
+
+%% Calibrate Current Data  
+
 temperature.vector = datalog(:,2);
-temperature.vector=temperature.vector(2:end);
 pv.voltage = datalog(:, 3);
-pv.voltage=pv.voltage(2:end);
 battery.voltage = datalog(:,5);
-battery.voltage=battery.voltage(2:end);
-
-% CAN USE BATTERY DATA FOR SOC ESTIMATION!
-
 pv.current = datalog(:,4);
-pv.current=pv.current(2:end);
 battery.current = datalog(:,6);
-battery.current = battery.current(2:end);
+
+if house_number == 2 || house_number == 3
+    temperature.vector=temperature.vector(2:end);
+    pv.voltage=pv.voltage(2:end);
+    battery.voltage=battery.voltage(2:end);
+    pv.current=pv.current(2:end);
+    battery.current = battery.current(2:end);
+end
 
 
+%Values of slope and zero are based on experimental data calibrating
+%digital readings of current to current values in Amps
 [slope, zero] = data_log_load_profile_calibration();
 
 pv.current_adj = (pv.current-zero.channel_2(house_number))*slope.channel_2(house_number);
 battery.current_adj = (battery.current-zero.channel_4(house_number))*slope.channel_4(house_number);
 
-%% Adjusting for current values less than zero (noise) on pv current only
+%% Adjusting for current values less than zero on PV current only
 for k=1:length(pv.current_adj)
     if pv.current_adj(k) < 0
         pv.current_adj(k) = 0;
-    end
-    
+    end 
 end
 
-%% Calculate Load Values (w/ temp adjustment)
+%% Calculate Load Values
 
 pv.power = pv.voltage.*pv.current_adj;
 battery.power = battery.voltage.*battery.current_adj;
 load.power = pv.power+battery.power;
 
-
+% Removing negative load values 
 for b=1:length(load.power)
     if load.power(b) < 0
         load.power(b) = 0;
     end
-    
-
-    
 end
 
+%% Calculate Rough Proxy for Irradiance
 
-%% Calculate Irradiance
-
-addpath('/Users/vmehra813/Dropbox (MIT)/[uLink]/Simulation/MatLab/uLink/Modeling Analysis/TPS');
-
+% Assumptions 
 solar.pv_eff = .15; % efficiency
 solar.pv_power = 70; %watts, TPS panel
 solar.pv_area = .467; %area of panel m2
@@ -162,60 +127,87 @@ solar.cc_eff = 0.95; % charge controller efficiency
 
 solar.irradiance_datalog = zeros(length(load.power),1);
 
-for k=1:length(pv.power)
-    
-    solar.irradiance_datalog(k) = pv.power(k)./(solar.pv_eff*solar.pv_area);
-    
+for k=1:length(pv.power) 
+    solar.irradiance_datalog(k) = (pv.power(k)./(solar.pv_eff*solar.pv_area))*(1/solar.cc_eff);
 end
 
-
-
-%% Adjust for Spillage
-
+%% Separate Spillage from Load 
 
 load.spillage = zeros(length(load.power),1);
 
-fan_spillage = 14; %mean power consumption of fan
-sigma_fan_spillage = .15*fan_spillage;
+%Only day-time appliance 
+fan_spillage = 14; %mean power consumption of fan, Watts 
+sigma_fan_spillage = .1*fan_spillage; %assumption on standard deviation of fan power
+ci_90 = 1.645;
+ci_95 = 1.96; 
 
-%fan_95_ci = [fan_spillage-1.96*sigma_fan_spillage, fan_spillage + 1.96*sigma_fan_spillage];
-fan_95_ci = [12, 16];
+% 90% confidence interval 
+fan_90_ci = [fan_spillage-ci_90*sigma_fan_spillage, fan_spillage + ci_90*sigma_fan_spillage];
 
 for c=1:length(load.power)
-    %if load.power(c) < 11.5
-    if solar.irradiance_datalog(c) > .05 && (load.power(c) < fan_95_ci(1) || load.power(c) > fan_95_ci(2))
+    
+    % if solar irrdiance is above 5 W/m2 and load value is NOT in 90% CI
+    % range, classify as spillage
+    if solar.irradiance_datalog(c) > .05 && (load.power(c) < fan_90_ci(1) || load.power(c) > fan_90_ci(2))
         load.spillage(c) = load.power(c);
         load.power(c) = 0;
         
-    elseif load.power(c) < fan_95_ci(1)
+   
+    elseif load.power(c) < fan_90_ci(1)
         load.spillage(c) = load.power(c);
         load.power(c) = 0;
         
     end
-    %end
     
-   
 end
 
-    
-    figure;
-    plotyy(date.ymd_hms(1:end-1),solar.irradiance_datalog,date.ymd_hms(1:end-1),load.power);
+%% Plotting / Visualization 
+ 
+    figure(1);
+    plotyy(date.ymd_hms,solar.irradiance_datalog,date.ymd_hms,load.power);
     legend('Solar Irradiance, Calculated','Load+Spillage');
-    xlabel('Time');
+    xlabel('Date & Time');
     ylabel('Watts/M2 and Watts');
+    set(gca,'fontsize',12);
+    title(strcat('House ',{' '},num2str(house_number),{' '},'June-Jan Irradiance, Load & Spillage'));
+
     
-    figure;
-    %plotyy(date.ymd_hms,solar.irradiance_datalog,date.ymd_hms,load.spillage);
-    plot(date.ymd_hms(1:end-1),solar.irradiance_datalog);
+    figure(2)
+    plot(date.ymd_hms,load.power,'c');
+    legend('Load');
+    xlabel('Date & Time');
+    ylabel('Watts/M2 and Watts');
+    set(gca,'fontsize',12);
+    title(strcat('House ',{' '},num2str(house_number),{' '},'June-Jan Load Profile'));
+    
+    
+    
+    figure(3);
+    plotyy(date.ymd_hms, battery.voltage,date.ymd_hms,battery.current_adj);
+    xlabel('Date & Time');
+    legend('Voltage','Current');
+    set(gca, 'fontsize',12);
+    title(strcat('House ',{' '},num2str(house_number),{' '},'June-Jan Battery Discharging/Charging Cycles'));
+   % Note that house 4 has a few transients in voltage/current
+    
+    
+    figure(4);
+    plot(date.ymd_hms, battery.power);
     hold on;
-    plot(date.ymd_hms(1:end-1),load.spillage);
-    plot(date.ymd_hms(1:end-1),load.power,'c');
-    legend('Solar Irradiance, Calculated','Spillage','Load');
-    xlabel('Time');
-    ylabel('Watts/M2 and Watts');
+    plot(date.ymd_hms, pv.power);
+    plot(date.ymd_hms, load.power);
+    plot(date.ymd_hms, load.spillage);
+    legend('Battery','Solar','Load','Spillage');
+    xlabel('Date & Time');
+    ylabel('Watts');
+    title(strcat('House ',{' '},num2str(house_number),{' '},'June-Jan All Variables'));
+
+
     
-
-
+%% Other notes 
+    
+% Note that other appliances in each household were 4x9W CFL's
+% Battery capacity is 75Ah
 
 
 
